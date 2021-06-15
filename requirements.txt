@@ -1,0 +1,5 @@
+uvloop==0.15.2
+aiohttp==3.7.4.post0
+aiofiles==0.7.0
+beautifulsoup4==4.9.3
+contextvars==2.4
