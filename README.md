@@ -6,6 +6,9 @@ Async crawler for news site https://news.ycombinator.com that:
     - save downloaded news pages into {dir}/{news-id}
 
 ## Installation & Usage:
+- Depends:
+    - OS: Linux
+    - Python: 3.9*
 
 ```
 $ git clone https://github.com/nj-eka/Ycrawler.git
