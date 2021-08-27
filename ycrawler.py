@@ -34,7 +34,8 @@ OUTPUT_DIR = 'news'  # news/{id}/{main_page_name}.{mimetypes.guess_extention()}
 MAX_FILE_NAME_LENGTH = 126
 # not to hang host with open requests
 REQUEST_CHUNKS = 256  # maximum number of concurrently open requests - semaphore (or aiohttp.TCPConnector(limit=...)) 
-REQUEST_TIMEOUT = 16.  # in secs
+REQUEST_TOTAL_TIMEOUT = 16.  # in secs
+REQUEST_CONNECTION_TIMEOUT = 1.  # in secs
 # not to be blocked by providers
 REQUEST_LIMIT_PER_HOST = 8
 # todo: + REQUEST_DELAY_PER_HOST = 0.42  
@@ -64,8 +65,10 @@ def parse_input_args():
                         default=TOP_NEWS, help='Top news count.')
     parser.add_argument('-c', '--chunks', type=int,
                         default=REQUEST_CHUNKS, help='Max allowed simultaneous requests.')
-    parser.add_argument('-t', '--timeout', type=float,
-                        default=REQUEST_TIMEOUT, help='Request timeout.')
+    parser.add_argument('-t', '--total-session-timeout', type=float,
+                        default=REQUEST_TOTAL_TIMEOUT , help='Total session request timeout.')
+    parser.add_argument('-u', '--connection-timeout', type=float,
+                        default=REQUEST_CONNECTION_TIMEOUT, help='Connection timeout.')
     parser.add_argument('-s', '--limitperhost', type=int,
                         default=REQUEST_LIMIT_PER_HOST, help='Open requests limit per host.')
     parser.add_argument('-o', '--output', type=str,
@@ -98,16 +101,16 @@ async def session_fetch(url: str, session: aiohttp.ClientSession) -> tuple[bytes
         content = await response.read()
         return content, response.headers['Content-Type']
 
-async def timed_session_fetch(url: str, session: aiohttp.ClientSession, timeout: float):
-    #*When a timeout occurs, it cancels the task and raises TimeoutError. 
-    # To avoid the task cancellation, wrap it in shield().
-    # If the wait is cancelled, the task is also cancelled.
-    return await asyncio.wait_for(session_fetch(url, session), timeout=timeout)   
+# async def timed_session_fetch(url: str, session: aiohttp.ClientSession, timeout: float):
+#     #*When a timeout occurs, it cancels the task and raises TimeoutError. 
+#     # To avoid the task cancellation, wrap it in shield().
+#     # If the wait is cancelled, the task is also cancelled.
+#     return await asyncio.wait_for(session_fetch(url, session), timeout=timeout)   
 
-async def sem_timed_session_fetch(url: str, sem: asyncio.Semaphore, timeout: float, session: aiohttp.ClientSession):
-    async with sem:
-        logging.debug('semaphore passed with value %d', sem._value)
-        return await timed_session_fetch(url, session, timeout)
+# async def sem_timed_session_fetch(url: str, sem: asyncio.Semaphore, timeout: float, session: aiohttp.ClientSession):
+#     async with sem:
+#         logging.debug('semaphore passed with value %d', sem._value)
+#         return await timed_session_fetch(url, session, timeout)
 
 async def save_content(content: bytes, dir_path: Path, url: str, content_type: str, prefix: str = ''):
     logging.debug('Start saving content in [%s] from [%s] with [%s] and length [%d]', dir_path, url, content_type, len(content))
@@ -168,12 +171,17 @@ async def async_main(args):
     news_processed = set()
     while True:
         logging.info('Start crawling session № %d', session_counter)
-        chunks_semaphore = asyncio.Semaphore(args.chunks)
-        tcp_conn = aiohttp.TCPConnector(limit_per_host=REQUEST_LIMIT_PER_HOST)
+        #chunks_semaphore = asyncio.Semaphore(args.chunks)
+        #tcp_conn = aiohttp.TCPConnector(limit_per_host=REQUEST_LIMIT_PER_HOST)
+        tcp_conn = aiohttp.TCPConnector(limit_per_host=REQUEST_LIMIT_PER_HOST, limit=args.chunks)
         jar = aiohttp.DummyCookieJar()
-        async with aiohttp.ClientSession(headers=_request_headers, connector=tcp_conn, cookie_jar=jar) as client_session:
-            fetch_page = partial(sem_timed_session_fetch, sem = chunks_semaphore, timeout = args.timeout, session = client_session)
+        session_timeout = aiohttp.ClientTimeout(total=args.total_session_timeout, connect=args.connection_timeout)
+        async with aiohttp.ClientSession(timeout=session_timeout, connector=tcp_conn, headers=_request_headers, cookie_jar=jar) as client_session:
+            # fetch_page = partial(sem_timed_session_fetch, sem = chunks_semaphore, timeout = args.timeout, session = client_session) # -> limit=args.chunks 
+            # fetch_page = partial(timed_session_fetch, timeout = args.timeout, session = client_session) # -> session_timeout
+            fetch_page = partial(session_fetch, session = client_session)
             content, content_type = await fetch_page(START_PAGE)
+
             tasks, news_ids = [], []
             parser = BeautifulSoup(markup=content, from_encoding=content_type.partition('charset=')[-1], features='html.parser')
             for news_tr_elem in parser.find_all('tr', 'athing', limit=args.top):
